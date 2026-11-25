@@ -196,9 +196,135 @@ convolutives, plus d'époques et plusieurs graines, tirage de l'AE selon la dist
 ---
 
 # Partie 2 : GAN (Abstract Art Gallery)
-_À compléter._
+
+## 2.1 Données et prétraitement
+Dataset **Abstract Art Gallery** (Kaggle) : **2 872 peintures abstraites** en couleur (RGB), réparties dans deux
+dossiers. Les tailles sont très variables (largeur de 230 à 6 720 px, hauteur de 251 à 8 192 px, médiane
+autour de 500 px).
+
+Chaque image est redimensionnée pour que son petit côté fasse 64 px (Lanczos), puis recadrée au centre en
+**64×64**. Aucune image n'a été ignorée. Les pixels sont ramenés dans [−1, 1] pour correspondre à la
+sortie `tanh` du générateur. Pendant l'entraînement, chaque image réelle est retournée horizontalement
+une fois sur deux. Il n'y a pas de découpage entraînement / test : un GAN n'a pas de cible à prédire,
+l'évaluation se fait sur les images générées.
+
+## 2.2 Architecture (DCGAN)
+
+| Partie | Couches |
+|---|---|
+| Générateur | bruit z ∈ R¹⁰⁰ → 4 blocs ConvTranspose (4×4, stride 2) + BatchNorm + ReLU, de 512 à 64 canaux → ConvTranspose finale → image 3×64×64 (`tanh`) |
+| Discriminateur | 4 blocs Conv (4×4, stride 2) de 64 à 512 canaux (BatchNorm sauf au premier bloc, LeakyReLU 0,2) → Conv finale → un logit |
+
+**3 576 704 paramètres** pour le générateur et **2 765 568** pour le discriminateur. Les poids sont initialisés
+selon une loi N(0 ; 0,02), comme dans l'article DCGAN.
+
+## 2.3 Entraînement
+- Perte : entropie croisée binaire (`BCEWithLogitsLoss`). Le générateur est entraîné à faire répondre
+  « réel » au discriminateur (version non saturante de la perte).
+- Adam, lr = 2e-4 pour les deux réseaux, β = (0,5 ; 0,999).
+- Lots de 64, **6 000 pas** (environ **134 époques**), un pas de D puis un pas de G, graine 42.
+- **Étiquette « réel » lissée à 0,9** pour éviter que le discriminateur soit trop sûr de lui.
+- Durée : **514 s** sur GPU Tesla T4 (Kaggle).
+
+## 2.4 Résultats
+
+**Suivi de l'entraînement** (valeurs relevées tous les 1 000 pas, sur un seul lot) :
+
+| Pas | Perte D | Perte G | D(x) | D(G(z)) avant → après la mise à jour de D |
+|---|---|---|---|---|
+| 1 000 | 0,547 | 5,690 | 0,77 | 0,09 → 0,01 |
+| 2 000 | 0,492 | 3,964 | 0,77 | 0,06 → 0,02 |
+| 3 000 | 0,644 | 4,775 | 0,84 | 0,21 → 0,01 |
+| 4 000 | 0,546 | 5,135 | 0,94 | 0,16 → 0,01 |
+| 5 000 | 0,671 | 2,533 | 0,67 | 0,09 → 0,10 |
+| 6 000 | 0,436 | 4,592 | 0,85 | 0,06 → 0,02 |
+
+![Courbes du GAN](results/gan_curves.png)
+![Évolution des images générées](results/gan_evolution.png)
+![Images réelles contre images générées](results/gan_real_vs_fake.png)
+
+**Contrôles chiffrés** (64 images générées contre 64 images réelles, pour la diversité ; moyennes sur
+l'ensemble pour les couleurs) :
+
+| Mesure | Réelles | Générées |
+|---|---|---|
+| Moyenne RGB (dans [−1, 1]) | 0,161 / 0,049 / −0,053 | 0,158 / 0,015 / −0,003 |
+| Écart type RGB | 0,58 / 0,55 / 0,55 | 0,64 / 0,61 / 0,61 |
+| Diversité (distance moyenne entre deux images) | 40,1 | 44,8 |
+| Distance à l'image réelle la plus proche | 15,1 (réelle à réelle) | 23,7 (générée à réelle) |
+
+![Images générées et leur image réelle la plus proche](results/gan_nearest_real.png)
+
+## 2.5 Analyse
+
+- **Les images évoluent en plusieurs étapes.** Aux pas 250 à 1 000, on ne voit que des textures
+  uniformes bleutées ou brunes avec un quadrillage régulier. Vers le pas 2 000 apparaissent des couleurs
+  franches et de vraies taches. Aux pas 3 000 et 4 500, les images deviennent très contrastées (fonds
+  blancs ou noirs, rouges et oranges vifs). Au pas 6 000, elles sont plus variées (taches, traits,
+  aplats), mais restent loin de la finesse des peintures réelles.
+- **Le discriminateur domine.** D(x) reste entre 0,65 et 0,95 environ et D(G(z)) entre 0,05 et 0,25
+  avant la mise à jour de D (au plus 0,1 après), très loin de l'équilibre théorique à 0,5. La perte du
+  générateur baisse de 8,5 à environ 4 mais oscille beaucoup (de 3 à 6) et ne se stabilise pas :
+  l'entraînement n'est pas convergé. Il n'a pas non plus divergé : la perte de D reste stable (0,5 à 0,9).
+- **Les courbes de perte ne mesurent pas la qualité.** Entre les pas 2 000 et 4 500, la perte du
+  générateur reste autour de 4 à 5 alors que les images changent beaucoup (apparition des fonds blancs et
+  des couleurs vives). Ce sont les images qu'il faut regarder.
+- **Les couleurs moyennes sont bien reproduites** (rouge quasi identique, vert un peu plus bas, bleu un
+  peu plus haut dans les images générées), mais les images générées sont **plus contrastées** que les
+  réelles (écart type supérieur de 10 % environ) : elles abusent des fonds blancs, des noirs profonds et
+  des couleurs saturées, alors que beaucoup de peintures réelles ont des tons beiges ou ternes, sur un
+  papier texturé.
+- **Pas d'effondrement global, mais un motif répété.** La diversité mesurée est supérieure à celle des
+  images réelles (44,8 contre 40,1), mais cette valeur est probablement gonflée en partie par le contraste
+  plus fort. Visuellement, un même motif bleu et orange en hachures diagonales revient sur une petite
+  dizaine d'images sur 64 : c'est un effondrement partiel des modes, ou un artefact en damier typique des
+  convolutions transposées.
+- **Le GAN ne copie pas le jeu de données.** Une image générée est en moyenne à 23,7 de son image réelle la
+  plus proche, contre 15,1 entre une image réelle et sa voisine : les images générées sont plus éloignées
+  du jeu de données que les réelles ne le sont entre elles, et les voisines affichées n'y ressemblent pas.
+  Avec 2 872 images seulement, un surapprentissage par mémorisation était pourtant un risque à surveiller.
+
+## 2.6 Conclusion et limites
+
+Le DCGAN apprend en quelques minutes à produire des images qui ressemblent à de la peinture abstraite
+(couleurs, taches, contrastes), sans en reproduire aucune. Les images restent clairement artificielles
+(artefacts de quadrillage, motif répété, contraste exagéré).
+
+**Limites.**
+- Une seule graine, un seul jeu d'hyperparamètres (aucune recherche), 6 000 pas, et un entraînement qui
+  n'est pas stabilisé.
+- Images réduites à 64×64 par recadrage central : la composition des grands tableaux est perdue.
+- Aucune mesure standard de qualité (FID, Inception Score) : les contrôles utilisés (couleurs, distance
+  moyenne dans l'espace des pixels réduits, plus proche voisin sur 16 images) sont grossiers.
+- La diversité et la distance au plus proche voisin sont calculées dans l'espace des pixels, qui ne
+  reflète pas bien la ressemblance visuelle.
+
+**Pistes.** Normalisation spectrale ou WGAN-GP pour stabiliser l'entraînement, augmentation de données
+adaptée aux GAN (DiffAugment), suréchantillonnage + convolution à la place des convolutions transposées
+pour réduire les artefacts en damier, résolution plus grande, plus de pas et plusieurs graines, calcul du FID.
 
 ---
 
 # Synthèse personnelle
-_À compléter à la fin du lab._
+
+Ce lab m'a surtout montré que ces trois modèles ne répondent pas à la même question. L'auto-encodeur
+apprend à **compresser** : il reconstruit presque parfaitement les chiffres (BCE de 61 sur le test avec 32
+dimensions), mais son espace latent n'est pas fait pour qu'on y tire des points au hasard, et ses codes
+aléatoires ne donnent que des traits sans forme. Le VAE ajoute un terme KL qui oblige l'espace latent à
+ressembler à une loi normale. Je perds en reconstruction (BCE de 83), et seules 11 dimensions sur 32 sont
+vraiment utilisées, mais en échange le modèle sait **générer** des chiffres reconnaissables. J'ai trouvé
+frappant de voir qu'un même espace latent à 2 dimensions donne un nuage en étoile très étalé pour l'AE
+et un nuage compact et centré pour le VAE : le coût de la régularisation se voit directement.
+
+Avec le GAN, la logique change : il n'y a plus de reconstruction à comparer, seulement un discriminateur
+qui juge. Je retiens deux choses. D'abord, **les courbes de perte ne disent presque rien** sur la qualité :
+la perte du générateur oscille sans jamais se stabiliser, alors que ce sont les images qui montrent le
+progrès (des textures grises au pas 250 jusqu'à de vraies taches de couleur au pas 6 000). Ensuite, évaluer
+un modèle génératif est beaucoup plus difficile que d'évaluer un modèle de reconstruction : j'ai dû
+regarder les images, comparer les couleurs et chercher les plus proches voisins, et je n'ai aucune mesure
+solide comme le FID. Je ne peux donc pas dire que mon GAN est « bon », seulement qu'il ne copie pas les
+données et qu'il reproduit à peu près les couleurs, avec un contraste exagéré et un motif qui se répète.
+
+Si je devais continuer, je commencerais par stabiliser l'entraînement du GAN (le discriminateur est trop
+fort), puis par mesurer la qualité plus sérieusement, aussi bien pour le GAN que pour la génération du
+VAE, qui n'a pas non plus de mesure quantitative.
