@@ -1,0 +1,5 @@
+modèle,accuracy k-NN (k=5)
+AE latent=2,0.786
+VAE latent=2,0.7551
+AE latent=32,0.9707
+VAE latent=32,0.9572
