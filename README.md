@@ -2,7 +2,7 @@
 
 **Université Abdelmalek Essaadi – FST Tanger**
 
-**Module :** Deep Learning – Pr. Elaachak Lotfi
+**Module :** Deep Learning et Applications – Pr. Elaachak Lotfi
 
 **Étudiante :** RAHELIARISOA Andriamasy Lorraine Agnès
 
